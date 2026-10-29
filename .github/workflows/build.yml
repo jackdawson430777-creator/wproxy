@@ -1,0 +1,93 @@
+name: Build wproxy APK from ZIP
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'wproxy-source.zip'
+      - '.github/workflows/build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses
+
+      - name: Extract wproxy source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f wproxy-source.zip
+          mkdir -p extracted
+          unzip -q -o wproxy-source.zip -d extracted
+
+          test -f extracted/wproxy/settings.gradle
+
+          echo "PROJECT_DIR=$GITHUB_WORKSPACE/extracted/wproxy" >> "$GITHUB_ENV"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Download and verify Mihomo ARM64 binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$PROJECT_DIR/app/src/main/assets"
+
+          URL="https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-android-arm64-v8-v1.19.33.gz"
+
+          FILE="$RUNNER_TEMP/mihomo-android-arm64-v8-v1.19.33.gz"
+
+          EXPECTED="2ddbd3aaa884f52b4568f406876ec81dddeef9f1bb67b90d4004d356e2c6a708"
+
+          curl --fail --location --retry 3 \
+            --output "$FILE" "$URL"
+
+          echo "$EXPECTED  $FILE" | sha256sum --check -
+
+          gzip -dc "$FILE" \
+            > "$PROJECT_DIR/app/src/main/assets/mihomo-arm64-v8a.bin"
+
+          chmod 0644 \
+            "$PROJECT_DIR/app/src/main/assets/mihomo-arm64-v8a.bin"
+
+          ls -lh "$PROJECT_DIR/app/src/main/assets/mihomo-arm64-v8a.bin"
+
+      - name: Build debug APK
+        run: |
+          gradle -p "$PROJECT_DIR" \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wproxy-debug-apk
+          path: extracted/wproxy/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
